@@ -34,7 +34,6 @@ impl<'a> Notes<'a> {
             map,
             notes
         }
-
     }
 }
 
@@ -72,6 +71,14 @@ impl<'a> Note<'a> {
                                                        why.description()),
             Ok(_) => (),
         };
+
+        // Only take the first 512 characters into account.
+        let mut end_length = 512;
+        if s.len() < end_length {
+            end_length = s.len();
+        }
+
+        s = String::from(&s[..end_length]);
 
         let title = match Self::title_from_string(s) {
             Err(_) => panic!("couldn't parse the title"),
