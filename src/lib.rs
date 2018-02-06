@@ -45,12 +45,17 @@ pub struct Note<'a> {
     tags: Vec<String>
 }
 
+pub struct NoteTitleMissing;
 impl<'a> Note<'a> {
-    pub fn title_from_string(text: String) -> String {
-        let re = Regex::new("^([^\n]+)\n-+\n").unwrap();
-        let caps = re.captures(text.as_str()).unwrap();
+    pub fn title_from_string(text: String) -> Result<String, NoteTitleMissing> {
+        let re = Regex::new("^([A-Za-z0-9 -_:]+)\n-+\n").unwrap();
+        let caps = match re.captures(text.as_str()) {
+            Some(x) => x,
+            None => return Err(NoteTitleMissing),
+        };
+
         let title = caps.get(1).map_or("", |m| m.as_str());
-        return String::from(title);
+        return Ok(String::from(title));
     }
 
     pub fn from_path(path: &'a Path, dir: String) -> Note<'a> {
@@ -66,9 +71,12 @@ impl<'a> Note<'a> {
             Err(why) => panic!("couldn't read {}: {}", display,
                                                        why.description()),
             Ok(_) => (),
-        }
+        };
 
-        let title = Self::title_from_string(s);
+        let title = match Self::title_from_string(s) {
+            Err(_) => panic!("couldn't parse the title"),
+            Ok(t) => t,
+        };
 
         if let Some(s) = path.parent().unwrap().to_str() {
             let mut remover = String::from("^");
@@ -96,11 +104,24 @@ mod tests {
     use Note;
     use std::path::Path;
 
+    fn parse_title_or_return_placeholder(text: &str, placeholder: &str) -> String {
+        let s = String::from(text);
+        match Note::title_from_string(s) {
+            Ok(string) => string,
+            Err(_) => String::from(placeholder),
+        }
+    }
+
     #[test]
     fn test_title_from_string() {
-        let s = String::from("Test\n----\n");
-        let n = Note::title_from_string(s);
+        let n = parse_title_or_return_placeholder("Test\n----\n", "err");
         assert_eq!(n, "Test");
+    }
+
+    #[test]
+    fn test_title_from_string_invalid() {
+        let n = parse_title_or_return_placeholder("\n", "err");
+        assert_eq!(n, "err");
     }
 
     #[test]
