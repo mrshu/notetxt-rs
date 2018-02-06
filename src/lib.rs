@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 use regex::Regex;
 use std::collections::HashMap;
+use std::fmt;
 
 
 #[allow(dead_code)]
@@ -44,33 +45,46 @@ pub struct Note<'a> {
     tags: Vec<String>
 }
 
-pub struct NoteTitleMissing;
+#[derive(PartialEq, Debug)]
+pub enum NoteErrors {
+    NoteTitleMissingError,
+}
+
+impl fmt::Display for NoteErrors {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            NoteErrors::NoteTitleMissingError => write!(f, "The note title could not be parsed.")
+        }
+    }
+}
+
+impl Error for NoteErrors {
+    fn description(&self) -> &str {
+        match *self {
+            NoteErrors::NoteTitleMissingError => "The provided string did not contain something like a note title."
+        }
+    }
+    fn cause(&self) -> Option<&Error> {
+        None
+    }
+}
+
 impl<'a> Note<'a> {
-    pub fn title_from_string(text: String) -> Result<String, NoteTitleMissing> {
+    pub fn title_from_string(text: String) -> Result<String, NoteErrors> {
         let re = Regex::new("^([A-Za-z0-9 -_:]+)\n-+\n").unwrap();
         let caps = match re.captures(text.as_str()) {
             Some(x) => x,
-            None => return Err(NoteTitleMissing),
+            None => return Err(NoteErrors::NoteTitleMissingError),
         };
 
         let title = caps.get(1).map_or("", |m| m.as_str());
         return Ok(String::from(title));
     }
 
-    pub fn from_path(path: &'a Path, dir: String) -> Note<'a> {
-        let display = path.display();
-        let mut file = match File::open(&path) {
-            Err(why) => panic!("couldn't open {}: {}", display,
-                                                       why.description()),
-            Ok(file) => file,
-        };
-
+    pub fn from_path(path: &'a Path, dir: String) -> Result<Note<'a>, Box<Error>> {
+        let mut file = File::open(&path)?;//.expect(&format!("Failed to open file {}", display));
         let mut s = String::new();
-        match file.read_to_string(&mut s) {
-            Err(why) => panic!("couldn't read {}: {}", display,
-                                                       why.description()),
-            Ok(_) => (),
-        };
+        file.read_to_string(&mut s)?;//.expect(&format!("Failed to read file {}", display));
 
         // Only take the first 512 characters into account.
         let mut end_length = 512;
@@ -80,10 +94,7 @@ impl<'a> Note<'a> {
 
         s = String::from(&s[..end_length]);
 
-        let title = match Self::title_from_string(s) {
-            Err(_) => panic!("couldn't parse the title"),
-            Ok(t) => t,
-        };
+        let title = Self::title_from_string(s)?;
 
         if let Some(s) = path.parent().unwrap().to_str() {
             let mut remover = String::from("^");
@@ -94,11 +105,13 @@ impl<'a> Note<'a> {
 
             let tag = re.replace(s, "").to_string();
             let tags: Vec<String> = vec![tag];
-            Note {
-                title,
-                path,
-                tags
-            }
+            Ok(
+                Note {
+                    title,
+                    path,
+                    tags
+                }
+            )
         } else {
             panic!("Tag path is not a valid UTF-8 sequence")
         }
@@ -109,6 +122,10 @@ impl<'a> Note<'a> {
 #[cfg(test)]
 mod tests {
     use Note;
+
+    #[allow(dead_code)]
+    use NoteErrors;
+
     use std::path::Path;
 
     fn parse_title_or_return_placeholder(text: &str, placeholder: &str) -> String {
@@ -135,7 +152,7 @@ mod tests {
     fn test_note_from_path() {
         let p = Path::new("tests/notes/test-note.md");
         let dir = String::from("");
-        let n = Note::from_path(p, dir);
+        let n = Note::from_path(p, dir).unwrap();
         assert_eq!(n.title, "Test note");
         assert_eq!(n.tags[0], "tests/notes");
         assert_eq!(n.path, p);
@@ -146,7 +163,7 @@ mod tests {
         // Test removal of beginning of the path
         let p = Path::new("./tests/notes/test-note.md");
         let dir = String::from("./");
-        let n = Note::from_path(p, dir);
+        let n = Note::from_path(p, dir).unwrap();
         assert_eq!(n.title, "Test note");
         assert_eq!(n.tags[0], "tests/notes");
         assert_eq!(n.path, p);
@@ -157,10 +174,48 @@ mod tests {
         // Test removal of beginning of the path with optional forward slash
         let p = Path::new("./tests/notes/test-note.md");
         let dir = String::from(".");
-        let n = Note::from_path(p, dir);
+        let n = Note::from_path(p, dir).unwrap();
         assert_eq!(n.title, "Test note");
         assert_eq!(n.tags[0], "tests/notes");
         assert_eq!(n.path, p);
     }
 
+    #[test]
+    fn test_very_long_note_from_path() {
+        let p = Path::new("./tests/notes/test-note-very-long.md");
+        let dir = String::from("./");
+        let n = Note::from_path(p, dir);
+        assert_eq!(n.is_err(), true);
+        //assert_eq!(n.err(), Some(NoteErrors::NoteTitleMissingError));
+    }
+
+    #[test]
+    fn test_note_from_path_pdf_file() {
+        let p = Path::new("./tests/notes/otherfile.pdf");
+        let dir = String::from("./");
+        let n = Note::from_path(p, dir);
+        assert_eq!(n.is_err(), true);
+        //panic!("{:?}", n.err());
+        //assert_eq!(n.err(), Some(NoteErrors::NoteTitleMissingError));
+    }
+
+    #[test]
+    fn test_note_from_path_tex_file() {
+        let p = Path::new("./tests/notes/otherfile.tex");
+        let dir = String::from("./");
+        let n = Note::from_path(p, dir);
+        assert_eq!(n.is_err(), true);
+        //panic!("{:?}", n.err());
+        //assert_eq!(n.err(), Some(NoteErrors::NoteTitleMissingError));
+    }
+
+    #[test]
+    fn test_note_from_nonexistent_path() {
+        let p = Path::new("./tests/notes/test-note-nonexistent.md");
+        let dir = String::from("./");
+        let n = Note::from_path(p, dir);
+        assert_eq!(n.is_err(), true);
+        panic!("{:?}", n.err());
+        //assert_eq!(n.err(), Some(NoteErrors::NoteTitleMissingError));
+    }
 }
