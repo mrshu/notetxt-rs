@@ -1,0 +1,7 @@
+[package]
+name = "notetxt"
+version = "0.0.1"
+authors = ["mr.Shu <mr@shu.io>"]
+
+[dependencies]
+regex = "0.2"
