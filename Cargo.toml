@@ -1,7 +1,10 @@
 [package]
 name = "notetxt"
+description = "An implementation of note.txt specification."
 version = "0.0.1"
 authors = ["mr.Shu <mr@shu.io>"]
+license = "MIT"
+repository = "https://github.com/mrshu/notetxt-rs"
 
 [dependencies]
 regex = "0.2"
