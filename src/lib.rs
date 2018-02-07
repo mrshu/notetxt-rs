@@ -1,47 +1,44 @@
 extern crate regex;
+extern crate glob;
 
 use std::error::Error;
 use std::io::prelude::*;
 use std::fs::File;
-use std::fs;
-use std::path::Path;
+use glob::glob;
+use std::path::PathBuf;
 use regex::Regex;
-use std::collections::HashMap;
 use std::fmt;
 
 
 #[allow(dead_code)]
-pub struct Notes<'a> {
-    dir: &'a str,
-    map: HashMap<&'a Path, &'a Note<'a>>,
-    notes: Vec<&'a Note<'a>>
+pub struct Notes {
+    dir: String,
+    notes: Vec<Note>
 }
 
-impl<'a> Notes<'a> {
-    pub fn from_dir(dir: &'a str) -> Notes<'a> {
-        let map = HashMap::new();
-        let notes = vec![];
-
-        match fs::read_dir(dir) {
-            Err(why) => println!("Error reading directory {:?} ({:?})",
-                                 dir, why.kind()),
-            Ok(paths) => for path in paths {
-                println!("> {:?}", path.unwrap().path());
-            },
-        }
-
+impl Notes {
+    pub fn from_dir(dir: String) -> Notes {
+        let relevant_files: Vec<PathBuf> = glob(format!("{}/**/*.*", dir).as_str())
+                                               .expect("Failed to read glob pattern")
+                                               .filter_map(Result::ok)
+                                               .collect();
+        let notes: Vec<Note> = relevant_files
+                                    .iter()
+                                    .map(|path: &PathBuf| Note::from_path(path))
+                                    .filter_map(Result::ok)
+                                    .collect();
         Notes {
             dir,
-            map,
             notes
         }
     }
 }
 
 #[allow(dead_code)]
-pub struct Note<'a> {
+#[derive(Debug)]
+pub struct Note {
     title: String,
-    path: &'a Path,
+    path: PathBuf,
     tags: Vec<String>
 }
 
@@ -69,7 +66,7 @@ impl Error for NoteErrors {
     }
 }
 
-impl<'a> Note<'a> {
+impl Note {
     pub fn title_from_string(text: String) -> Result<String, NoteErrors> {
         let re = Regex::new("^([A-Za-z0-9 -_:]+)\n-+\n").unwrap();
         let caps = match re.captures(text.as_str()) {
@@ -81,8 +78,8 @@ impl<'a> Note<'a> {
         return Ok(String::from(title));
     }
 
-    pub fn from_path(path: &'a Path, dir: String) -> Result<Note<'a>, Box<Error>> {
-        let mut file = File::open(&path)?;//.expect(&format!("Failed to open file {}", display));
+    pub fn from_path(path: &PathBuf) -> Result<Note, Box<Error>> {
+        let mut file = File::open(path.as_path())?;//.expect(&format!("Failed to open file {}", display));
         let mut s = String::new();
         file.read_to_string(&mut s)?;//.expect(&format!("Failed to read file {}", display));
 
@@ -96,25 +93,23 @@ impl<'a> Note<'a> {
 
         let title = Self::title_from_string(s)?;
 
-        if let Some(s) = path.parent().unwrap().to_str() {
-            let mut remover = String::from("^");
-            remover.push_str(dir.as_str());
-            // Remove the last separator optionally
-            remover.push_str(r"/?");
-            let re = Regex::new(remover.as_str()).unwrap();
+        let dir_pathbuf = {
+            let mut new_path = path.clone();
+            new_path.pop();
+            new_path
+        };
 
-            let tag = re.replace(s, "").to_string();
-            let tags: Vec<String> = vec![tag];
-            Ok(
-                Note {
-                    title,
-                    path,
-                    tags
-                }
-            )
-        } else {
-            panic!("Tag path is not a valid UTF-8 sequence")
-        }
+        let tag = String::from(dir_pathbuf.to_str().unwrap());
+        let tags: Vec<String> = vec![tag];
+        let mut path = path.clone();
+        path = path.canonicalize().unwrap();
+        Ok(
+            Note {
+                title,
+                path,
+                tags
+            }
+        )
     }
 }
 
@@ -122,11 +117,10 @@ impl<'a> Note<'a> {
 #[cfg(test)]
 mod tests {
     use Note;
+    use Notes;
+    use std::error::Error;
+    use std::path::PathBuf;
 
-    #[allow(dead_code)]
-    use NoteErrors;
-
-    use std::path::Path;
 
     fn parse_title_or_return_placeholder(text: &str, placeholder: &str) -> String {
         let s = String::from(text);
@@ -148,74 +142,47 @@ mod tests {
         assert_eq!(n, "err");
     }
 
+    fn note_from_path(path: &str) -> Result<Note, Box<Error>> {
+        let p = PathBuf::from(path);
+        return Note::from_path(&p);
+    }
+
     #[test]
     fn test_note_from_path() {
-        let p = Path::new("tests/notes/test-note.md");
-        let dir = String::from("");
-        let n = Note::from_path(p, dir).unwrap();
+        let path = "tests/notes/test-note.md";
+        let n = note_from_path(path).unwrap();
         assert_eq!(n.title, "Test note");
         assert_eq!(n.tags[0], "tests/notes");
-        assert_eq!(n.path, p);
-    }
-
-    #[test]
-    fn test_note_from_path_dir_removal() {
-        // Test removal of beginning of the path
-        let p = Path::new("./tests/notes/test-note.md");
-        let dir = String::from("./");
-        let n = Note::from_path(p, dir).unwrap();
-        assert_eq!(n.title, "Test note");
-        assert_eq!(n.tags[0], "tests/notes");
-        assert_eq!(n.path, p);
-    }
-
-    #[test]
-    fn test_note_from_path_dir_removal_with_default() {
-        // Test removal of beginning of the path with optional forward slash
-        let p = Path::new("./tests/notes/test-note.md");
-        let dir = String::from(".");
-        let n = Note::from_path(p, dir).unwrap();
-        assert_eq!(n.title, "Test note");
-        assert_eq!(n.tags[0], "tests/notes");
-        assert_eq!(n.path, p);
+        assert_eq!(n.path, PathBuf::from(path).canonicalize().unwrap());
     }
 
     #[test]
     fn test_very_long_note_from_path() {
-        let p = Path::new("./tests/notes/test-note-very-long.md");
-        let dir = String::from("./");
-        let n = Note::from_path(p, dir);
+        let n = note_from_path("./tests/notes/test-note-very-long.md");
         assert_eq!(n.is_err(), true);
-        //assert_eq!(n.err(), Some(NoteErrors::NoteTitleMissingError));
     }
 
     #[test]
     fn test_note_from_path_pdf_file() {
-        let p = Path::new("./tests/notes/otherfile.pdf");
-        let dir = String::from("./");
-        let n = Note::from_path(p, dir);
+        let n = note_from_path("./tests/notes/otherfile.pdf");
         assert_eq!(n.is_err(), true);
-        //panic!("{:?}", n.err());
-        //assert_eq!(n.err(), Some(NoteErrors::NoteTitleMissingError));
     }
 
     #[test]
     fn test_note_from_path_tex_file() {
-        let p = Path::new("./tests/notes/otherfile.tex");
-        let dir = String::from("./");
-        let n = Note::from_path(p, dir);
+        let n = note_from_path("./tests/notes/otherfile.tex");
         assert_eq!(n.is_err(), true);
-        //panic!("{:?}", n.err());
-        //assert_eq!(n.err(), Some(NoteErrors::NoteTitleMissingError));
     }
 
     #[test]
     fn test_note_from_nonexistent_path() {
-        let p = Path::new("./tests/notes/test-note-nonexistent.md");
-        let dir = String::from("./");
-        let n = Note::from_path(p, dir);
+        let n = note_from_path("./tests/notes/test-note-nonexistent.md");
         assert_eq!(n.is_err(), true);
-        panic!("{:?}", n.err());
-        //assert_eq!(n.err(), Some(NoteErrors::NoteTitleMissingError));
+    }
+
+    #[test]
+    fn test_notes_form_dir() {
+        let notes = Notes::from_dir(String::from("./tests/"));
+        assert_eq!(notes.notes.len(), 1);
     }
 }
