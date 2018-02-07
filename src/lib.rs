@@ -18,15 +18,43 @@ pub struct Notes {
 
 impl Notes {
     pub fn from_dir(dir: String) -> Notes {
-        let relevant_files: Vec<PathBuf> = glob(format!("{}/**/*.*", dir).as_str())
-                                               .expect("Failed to read glob pattern")
-                                               .filter_map(Result::ok)
-                                               .collect();
-        let notes: Vec<Note> = relevant_files
-                                    .iter()
-                                    .map(|path: &PathBuf| Note::from_path(path))
+        let dir_buf = {
+            let buf = PathBuf::from(dir.clone());
+            buf.canonicalize().unwrap()
+        };
+
+        let files: Vec<PathBuf> = glob(format!("{}/**/*", dir_buf.to_str().unwrap()).as_str())
+                                       .expect("Failed to read glob pattern")
+                                       .filter_map(Result::ok)
+                                       .filter(|p| !p.symlink_metadata().unwrap()
+                                                     .file_type().is_symlink())
+                                       .collect();
+
+        let symlinks: Vec<PathBuf> = glob(format!("{}/**/*", dir_buf.to_str().unwrap()).as_str())
+                                          .expect("Failed to read glob pattern")
+                                          .filter_map(Result::ok)
+                                          .filter(|p| p.symlink_metadata().unwrap()
+                                                       .file_type().is_symlink())
+                                          .collect();
+
+        let mut notes: Vec<Note> = files.iter()
+                                    .map(|path: &PathBuf| Note::from_path(path, &dir_buf))
                                     .filter_map(Result::ok)
                                     .collect();
+
+        for link in symlinks.iter() {
+            for note in notes.iter_mut() {
+                let read_link = link.canonicalize().unwrap();
+                if note.path.to_str() == read_link.to_str() {
+                    let bare_file = link.strip_prefix(dir_buf.to_str().unwrap()).unwrap();
+                    let bare_directory = bare_file.parent().unwrap();
+                    let tag = String::from(bare_directory.to_str().unwrap());
+
+                    note.tags.push(tag);
+                }
+            }
+        }
+
         Notes {
             dir,
             notes
@@ -78,7 +106,7 @@ impl Note {
         return Ok(String::from(title));
     }
 
-    pub fn from_path(path: &PathBuf) -> Result<Note, Box<Error>> {
+    pub fn from_path(path: &PathBuf, note_dir: &PathBuf) -> Result<Note, Box<Error>> {
         let mut file = File::open(path.as_path())?;//.expect(&format!("Failed to open file {}", display));
         let mut s = String::new();
         file.read_to_string(&mut s)?;//.expect(&format!("Failed to read file {}", display));
@@ -96,10 +124,13 @@ impl Note {
         let dir_pathbuf = {
             let mut new_path = path.clone();
             new_path.pop();
-            new_path
+            new_path.canonicalize().unwrap()
         };
 
-        let tag = String::from(dir_pathbuf.to_str().unwrap());
+        let dir = note_dir.canonicalize().unwrap();
+
+        let tag = String::from(dir_pathbuf.strip_prefix(dir.to_str().unwrap()).unwrap()
+                               .to_str().unwrap());
         let tags: Vec<String> = vec![tag];
         let mut path = path.clone();
         path = path.canonicalize().unwrap();
@@ -142,15 +173,16 @@ mod tests {
         assert_eq!(n, "err");
     }
 
-    fn note_from_path(path: &str) -> Result<Note, Box<Error>> {
+    fn note_from_path(path: &str, dir: &str) -> Result<Note, Box<Error>> {
         let p = PathBuf::from(path);
-        return Note::from_path(&p);
+        let d = PathBuf::from(dir);
+        return Note::from_path(&p, &d);
     }
 
     #[test]
     fn test_note_from_path() {
-        let path = "tests/notes/test-note.md";
-        let n = note_from_path(path).unwrap();
+        let path = "./tests/notes/test-note.md";
+        let n = note_from_path(path, "./").unwrap();
         assert_eq!(n.title, "Test note");
         assert_eq!(n.tags[0], "tests/notes");
         assert_eq!(n.path, PathBuf::from(path).canonicalize().unwrap());
@@ -158,25 +190,25 @@ mod tests {
 
     #[test]
     fn test_very_long_note_from_path() {
-        let n = note_from_path("./tests/notes/test-note-very-long.md");
+        let n = note_from_path("./tests/notes/test-note-very-long.md", "./");
         assert_eq!(n.is_err(), true);
     }
 
     #[test]
     fn test_note_from_path_pdf_file() {
-        let n = note_from_path("./tests/notes/otherfile.pdf");
+        let n = note_from_path("./tests/notes/otherfile.pdf", "./");
         assert_eq!(n.is_err(), true);
     }
 
     #[test]
     fn test_note_from_path_tex_file() {
-        let n = note_from_path("./tests/notes/otherfile.tex");
+        let n = note_from_path("./tests/notes/otherfile.tex", "./");
         assert_eq!(n.is_err(), true);
     }
 
     #[test]
     fn test_note_from_nonexistent_path() {
-        let n = note_from_path("./tests/notes/test-note-nonexistent.md");
+        let n = note_from_path("./tests/notes/test-note-nonexistent.md", "./");
         assert_eq!(n.is_err(), true);
     }
 
@@ -184,5 +216,6 @@ mod tests {
     fn test_notes_form_dir() {
         let notes = Notes::from_dir(String::from("./tests/"));
         assert_eq!(notes.notes.len(), 1);
+        assert_eq!(notes.notes[0].tags.len(), 2);
     }
 }
